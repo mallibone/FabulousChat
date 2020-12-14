@@ -1,61 +1,104 @@
 ﻿// Copyright Fabulous contributors. See LICENSE.md for license.
 namespace FabulousChat
 
-open System.Diagnostics
+open System
+open System.Text.Json
 open Fabulous
 open Fabulous.XamarinForms
-open Fabulous.XamarinForms.LiveUpdate
 open Xamarin.Forms
+open Microsoft.AspNetCore.SignalR.Client
 
-module App = 
-    type Model = 
-      { Count: int
-        Step: int
-        TimerOn: bool }
-
+[<AutoOpen>]
+module Core =
+    type ChatMessage =
+        {Username : string
+         Message : string
+         Timestamp : DateTimeOffset}
+        
     type Msg = 
-        | Increment 
-        | Decrement 
-        | Reset
-        | SetStep of int
-        | TimerToggled of bool
-        | TimedTick
+        | Connected of HubConnection
+        | SendMessage
+        | MessageSent
+        | MessageChanged of string
+        | MessageReceived of ChatMessage
 
-    let initModel = { Count = 0; Step = 1; TimerOn=false }
+module SignalR =
+    let connectToServer =
+        let connection = HubConnectionBuilder()
+                             .WithUrl("https://signalr-gnabber-function.azurewebsites.net/api")
+                             .WithAutomaticReconnect()
+                             .Build()
+    
+        async {
+              do! connection.StartAsync() |> Async.AwaitTask
+              return connection
+        }
+        
+    let startListeningToChatMessages (connection:HubConnection) dispatch =
+        let handleReceivedMessage (msg:string) =
+            dispatch (Msg.MessageReceived (JsonSerializer.Deserialize<ChatMessage>(msg)))
+            
+        connection.On<string>("NewMessage", handleReceivedMessage)
+        
+    let sendMessage (connection:HubConnection) (message:ChatMessage) =
+        async {
+            do! connection.SendAsync("SendMessage", message) |> Async.AwaitTask
+        }
 
-    let init () = initModel, Cmd.none
+module App =
+    type AppState = Ready | Busy //| Error of string
+    type Model = 
+      { Username: string
+        ChatMessage: string
+        AppState: AppState
+        Messages: ChatMessage List
+        SignalRConnection: HubConnection Option }
 
-    let timerCmd =
-        async { do! Async.Sleep 200
-                return TimedTick }
+    let initModel = { Username = "Gnabber"; ChatMessage = ""; Messages = []; SignalRConnection=None; AppState = Busy }
+
+    let initSignalR =
+        async {
+            let! connection = SignalR.connectToServer
+            return Msg.Connected connection
+        }
+    let init () = initModel, Cmd.ofAsyncMsg (initSignalR)
+
+    let sendMessage (connection:HubConnection) username chatMessage =
+        let chatMessage = {Username = username; Message = chatMessage; Timestamp = DateTimeOffset.Now }
+        async {
+            do! (SignalR.sendMessage connection chatMessage)
+            return MessageSent
+        }
         |> Cmd.ofAsyncMsg
 
     let update msg model =
         match msg with
-        | Increment -> { model with Count = model.Count + model.Step }, Cmd.none
-        | Decrement -> { model with Count = model.Count - model.Step }, Cmd.none
-        | Reset -> init ()
-        | SetStep n -> { model with Step = n }, Cmd.none
-        | TimerToggled on -> { model with TimerOn = on }, (if on then timerCmd else Cmd.none)
-        | TimedTick -> 
-            if model.TimerOn then 
-                { model with Count = model.Count + model.Step }, timerCmd
-            else 
-                model, Cmd.none
+        | MessageReceived chatMessage -> { model with Messages = chatMessage::model.Messages }, Cmd.none
+        | MessageSent -> { model with AppState = Ready }, Cmd.none
+        | MessageChanged newMessage -> { model with ChatMessage = newMessage }, Cmd.none
+        | Connected connection -> { model with SignalRConnection = Some connection; AppState = Ready }, Cmd.none
+        | SendMessage ->
+                {model with AppState = Busy},
+                match model.SignalRConnection with
+                | Some(connection) -> (sendMessage connection model.Username model.ChatMessage)
+                | None -> Cmd.none
 
     let view (model: Model) dispatch =
         View.ContentPage(
-          content = View.StackLayout(padding = Thickness 20.0, verticalOptions = LayoutOptions.Center,
-            children = [ 
-                View.Label(text = sprintf "%d" model.Count, horizontalOptions = LayoutOptions.Center, width=200.0, horizontalTextAlignment=TextAlignment.Center)
-                View.Button(text = "Increment", command = (fun () -> dispatch Increment), horizontalOptions = LayoutOptions.Center)
-                View.Button(text = "Decrement", command = (fun () -> dispatch Decrement), horizontalOptions = LayoutOptions.Center)
-                View.Label(text = "Timer", horizontalOptions = LayoutOptions.Center)
-                View.Switch(isToggled = model.TimerOn, toggled = (fun on -> dispatch (TimerToggled on.Value)), horizontalOptions = LayoutOptions.Center)
-                View.Slider(minimumMaximum = (0.0, 10.0), value = double model.Step, valueChanged = (fun args -> dispatch (SetStep (int (args.NewValue + 0.5)))), horizontalOptions = LayoutOptions.FillAndExpand)
-                View.Label(text = sprintf "Step size: %d" model.Step, horizontalOptions = LayoutOptions.Center) 
-                View.Button(text = "Reset", horizontalOptions = LayoutOptions.Center, command = (fun () -> dispatch Reset), commandCanExecute = (model <> initModel))
-            ]))
+            content = View.Label(text = "Hello world")
+        )
+//        View.ContentPage(
+//          content = View.StackLayout(padding = Thickness 20.0, verticalOptions = LayoutOptions.Center,
+//            children = [ 
+//                View.Label(text = sprintf "%d" model.Count, horizontalOptions = LayoutOptions.Center, width=200.0, horizontalTextAlignment=TextAlignment.Center)
+//                View.Button(text = "Increment", command = (fun () -> dispatch Increment), horizontalOptions = LayoutOptions.Center)
+//                View.Button(text = "Decrement", command = (fun () -> dispatch Decrement), horizontalOptions = LayoutOptions.Center)
+//                View.Label(text = "Timer", horizontalOptions = LayoutOptions.Center)
+//                View.Switch(isToggled = model.TimerOn, toggled = (fun on -> dispatch (TimerToggled on.Value)), horizontalOptions = LayoutOptions.Center)
+//                View.Slider(minimumMaximum = (0.0, 10.0), value = double model.Step, valueChanged = (fun args -> dispatch (SetStep (int (args.NewValue + 0.5)))), horizontalOptions = LayoutOptions.FillAndExpand)
+//                View.Label(text = sprintf "Step size: %d" model.Step, horizontalOptions = LayoutOptions.Center) 
+//                View.Button(text = "Reset", horizontalOptions = LayoutOptions.Center, command = (fun () -> dispatch Reset), commandCanExecute = (model <> initModel))
+//            ]))
 
     // Note, this declaration is needed if you enable LiveUpdate
     let program =
