@@ -14,10 +14,10 @@ module Core =
     type AppState =
         | Ready
         | Busy //| Error of string
-        
+
     type Page =
-    | Login
-    | Chat
+        | Login
+        | Chat
 
     type ChatMessage =
         { Username: string
@@ -31,7 +31,7 @@ module Core =
           AppState: AppState
           Messages: ChatMessage List
           SignalRConnection: HubConnection Option }
-        
+
     type Msg =
         | LoggingIn
         | LoggedIn
@@ -45,8 +45,10 @@ module Core =
 module SignalR =
     let connectToServer =
         let connection =
-            HubConnectionBuilder().WithUrl(Config.SignalRUrl)
-                .WithAutomaticReconnect().Build()
+            HubConnectionBuilder()
+                .WithUrl(Config.SignalRUrl)
+                .WithAutomaticReconnect()
+                .Build()
 
         async {
             do! connection.StartAsync() |> Async.AwaitTask
@@ -56,40 +58,87 @@ module SignalR =
     let startListeningToChatMessages (connection: HubConnection) dispatch =
         let handleReceivedMessage (msg: string) =
             printfn "Received message: %s" msg
-            dispatch (Msg.MessageReceived (JsonSerializer.Deserialize<ChatMessage>(msg)))
+            dispatch (Msg.MessageReceived(JsonSerializer.Deserialize<ChatMessage>(msg)))
             ()
-            
+
         connection.On<string>("NewMessage", handleReceivedMessage)
 
     let sendMessage (connection: HubConnection) (message: ChatMessage) =
         async {
             let jsonMessage = JsonSerializer.Serialize(message)
+
             do! connection.SendAsync("SendMessage", jsonMessage)
                 |> Async.AwaitTask
         }
-        
+
 module Login =
     let loginUser dispatch =
         async {
             let! connection = SignalR.connectToServer
             dispatch (Msg.Connected connection)
-            SignalR.startListeningToChatMessages connection dispatch |> ignore
+
+            SignalR.startListeningToChatMessages connection dispatch
+            |> ignore
+
             dispatch (Msg.LoggedIn)
-        } |> Async.StartImmediate
-        
+        }
+        |> Async.StartImmediate
+
     let view model dispatch =
         View.ContentPage
             (title = "Login",
-             content = View.StackLayout(verticalOptions=LayoutOptions.Center, horizontalOptions = LayoutOptions.Center,
-                                        children=[
-                                            View.Label(text="Please enter your Username")
-                                            View.Entry(text=model.Username, placeholder="Please enter your username", textChanged = fun e -> dispatch (UsernameChanged e.NewTextValue))
-                                            View.Button(text = "Login", command = fun _ -> (loginUser dispatch) )
-                                        ]))
+             content =
+                 View.StackLayout
+                     (verticalOptions = LayoutOptions.Center,
+                      horizontalOptions = LayoutOptions.Center,
+                      children =
+                          [ View.Label(text = "Please enter your Username")
+                            View.Entry
+                                (text = model.Username,
+                                 placeholder = "Please enter your username",
+                                 textChanged = fun e -> dispatch (UsernameChanged e.NewTextValue))
+                            View.Button(text = "Login", command = fun _ -> (loginUser dispatch)) ]))
+
 module Chat =
-    let chatMessageView messages =
-        messages
-        |> List.map (fun msg -> View.Label(text = msg.Message, textColor = Color.Black))
+    let chatBubble username (message: ChatMessage) =
+        let bubble column color =
+            View.ContentView
+                (padding = Thickness(0., 8.),
+                 content=
+                    View.Frame
+                        (cornerRadius=3.,
+                         hasShadow=false,
+                         backgroundColor= color,
+                         padding = Thickness 0.,
+                         isClippedToBounds=true,
+                         margin = 
+                             (if column = 1 then
+                                Thickness (32., 0., 0., 0.)
+                              else
+                                Thickness (0., 0., 0., 32.)
+                             ),
+                         content = 
+                            View.Grid
+                                (rowdefs = [ Dimension.Star; Dimension.Auto ],
+                                 margin = Thickness(4.,4.),
+                                 children =
+                                     [ View
+                                         .Label(text = message.Message,
+                                                textColor = Color.Black,
+                                                fontSize = FontSize.fromNamedSize NamedSize.Default)
+                                           .Row(0)
+                                       View
+                                           .Label(text = $"{message.Username} - {message.Timestamp}",
+                                                  textColor = Color.Black,
+                                                  fontSize = FontSize.fromNamedSize NamedSize.Small)
+                                           .Row(1)])))
+
+        if username = message.Username then bubble 1 Color.PowderBlue else bubble 0 Color.PaleGreen
+
+    let chatMessageView model =
+        model.Messages
+        |> List.rev
+        |> List.map (fun msg -> chatBubble model.Username msg)
 
     let view model dispatch =
         View.ContentPage
@@ -97,19 +146,26 @@ module Chat =
              content =
                  View.Grid
                      (rowdefs = [ Dimension.Star; Dimension.Auto ],
+                      margin= Thickness 8.,
                       children =
-                          [ View.CollectionView(items = (chatMessageView (model.Messages |> List.rev))).Row(0)
+                          [ View
+                              .CollectionView(items = (chatMessageView model))
+                                .Row(0)
                             (View.Grid
-                                (coldefs = [Dimension.Star; Dimension.Auto],
+                                (coldefs = [ Dimension.Star; Dimension.Auto ],
                                  children =
-                                    [ (View.Entry
-                                        (placeholder = "Speak your mind...",
-                                         text = model.ChatMessage,
-                                         textChanged = fun e -> dispatch (MessageChanged e.NewTextValue))).Column(0)
-                                      View.Button(text = "Send", command = fun () -> dispatch SendMessage).Column(1) ]))
-                                .Row(1)
-                                    
-                          ]))
+                                     [ (View.Entry
+                                         (placeholder = "Speak your mind...",
+                                          text = model.ChatMessage,
+                                          keyboard=Keyboard.Chat,
+                                          completed = (fun _ -> dispatch SendMessage),
+                                          textChanged = fun e -> dispatch (MessageChanged e.NewTextValue)
+                                          ))
+                                         .Column(0)
+                                       View
+                                           .Button(text = "Send", command = fun () -> dispatch SendMessage)
+                                           .Column(1) ]))
+                                .Row(1) ]))
 
 module App =
     let initModel =
@@ -134,16 +190,24 @@ module App =
         }
         |> Cmd.ofAsyncMsg
 
-    let update msg (model:Model) =
+    let update msg (model: Model) =
         match msg with
-        | LoggingIn -> {model with AppState = Busy}, Cmd.none
-        | LoggedIn -> {model with CurrentPage = Chat; AppState = Ready}, Cmd.none
-        | UsernameChanged username -> {model with Username = username}, Cmd.none
+        | LoggingIn -> { model with AppState = Busy }, Cmd.none
+        | LoggedIn ->
+            { model with
+                  CurrentPage = Chat
+                  AppState = Ready },
+            Cmd.none
+        | UsernameChanged username -> { model with Username = username }, Cmd.none
         | MessageReceived chatMessage ->
             { model with
                   Messages = chatMessage :: model.Messages },
             Cmd.none
-        | MessageSent -> { model with ChatMessage = ""; AppState = Ready }, Cmd.none
+        | MessageSent ->
+            { model with
+                  ChatMessage = ""
+                  AppState = Ready },
+            Cmd.none
         | MessageChanged newMessage -> { model with ChatMessage = newMessage }, Cmd.none
         | Connected connection ->
             { model with
@@ -156,7 +220,7 @@ module App =
             | Some (connection) -> (sendMessage connection model.Username model.ChatMessage)
             | None -> Cmd.none
 
-//    let ch model dispatch =
+    //    let ch model dispatch =
 //        View.ContentPage()
     let view (model: Model) dispatch =
         // todo: add nav page
@@ -196,11 +260,11 @@ type App() as app =
             Newtonsoft.Json.JsonConvert.SerializeObject(runner.CurrentModel)
 
         Console.WriteLine("OnSleep: saving model into app.Properties, json = {0}", json)
-
         app.Properties.[modelId] <- json
 
     override __.OnResume() =
         Console.WriteLine "OnResume: checking for model in app.Properties"
+
         try
             match app.Properties.TryGetValue modelId with
             | true, (:? string as json) ->
