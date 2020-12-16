@@ -2,6 +2,7 @@
 namespace FabulousChat
 
 open System
+open System.Globalization
 open System.Text.Json
 open Fabulous
 open Fabulous.XamarinForms.LiveUpdate
@@ -97,9 +98,13 @@ module Login =
                                 (text = model.Username,
                                  placeholder = "Please enter your username",
                                  textChanged = fun e -> dispatch (UsernameChanged e.NewTextValue))
-                            View.Button(text = "Login", command = fun _ -> (loginUser dispatch)) ]))
+                            View.Button(text = "Login", command = fun _ -> (loginUser dispatch))
+                            ]))
 
 module Chat =
+    let prettyTimestamp (timestamp:DateTimeOffset) =
+        timestamp.ToString("g", CultureInfo.CreateSpecificCulture("de-CH"))
+        
     let chatBubble username (message: ChatMessage) =
         let bubble column color =
             View.ContentView
@@ -128,7 +133,7 @@ module Chat =
                                                 fontSize = FontSize.fromNamedSize NamedSize.Default)
                                            .Row(0)
                                        View
-                                           .Label(text = $"{message.Username} - {message.Timestamp}",
+                                           .Label(text = $"{message.Username} - {prettyTimestamp message.Timestamp}",
                                                   textColor = Color.Black,
                                                   fontSize = FontSize.fromNamedSize NamedSize.Small)
                                            .Row(1)])))
@@ -169,7 +174,7 @@ module Chat =
 
 module App =
     let initModel =
-        { Username = "Gnabber"
+        { Username = ""
           ChatMessage = ""
           Messages = []
           SignalRConnection = None
