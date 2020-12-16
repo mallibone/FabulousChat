@@ -96,7 +96,9 @@ module Login =
                           [ View.Label(text = "Please enter your Username")
                             View.Entry
                                 (text = model.Username,
+                                 maxLength = 15,
                                  placeholder = "Please enter your username",
+                                 completed = (fun _ -> (loginUser dispatch)),
                                  textChanged = fun e -> dispatch (UsernameChanged e.NewTextValue))
                             View.Button(text = "Login", command = fun _ -> (loginUser dispatch))
                             ]))
@@ -162,8 +164,8 @@ module Chat =
                                      [ (View.Entry
                                          (placeholder = "Speak your mind...",
                                           text = model.ChatMessage,
+                                          maxLength = 160,
                                           keyboard=Keyboard.Chat,
-                                          completed = (fun _ -> dispatch SendMessage),
                                           textChanged = fun e -> dispatch (MessageChanged e.NewTextValue)
                                           ))
                                          .Column(0)
